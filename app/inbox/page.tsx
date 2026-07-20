@@ -17,7 +17,7 @@ import {
   DollarSign,
   Calendar,
   Sparkles,
-  RefreshCw,
+  Plus,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,21 +26,22 @@ import { Conversation, Message, Lead } from "@/types";
 
 export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConvId, setActiveConvId] = useState<string>("conv-1");
+  const [activeConvId, setActiveConvId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTabFilter, setActiveTabFilter] = useState<"all" | "active" | "pending">("all");
-  const [loading, setLoading] = useState(true);
 
-  // Real-Time Data Fetching from Live Database APIs
   const fetchConversations = async () => {
     try {
       const res = await fetch("/api/conversations");
       if (res.ok) {
         const data = await res.json();
         setConversations(data);
+        if (data.length && !activeConvId) {
+          setActiveConvId(data[0].id);
+        }
       }
     } catch (e) {
       console.error(e);
@@ -48,6 +49,7 @@ export default function InboxPage() {
   };
 
   const fetchMessages = async (convId: string) => {
+    if (!convId) return;
     try {
       const res = await fetch(`/api/messages?conversationId=${convId}`);
       if (res.ok) {
@@ -62,17 +64,15 @@ export default function InboxPage() {
   const fetchLeads = async () => {
     try {
       const res = await fetch("/api/leads");
-      if (res.ok) {
-        const data = await res.json();
-        setLeads(data);
-      }
+      if (res.ok) setLeads(await res.json());
     } catch (e) {
       console.error(e);
     }
   };
 
   useEffect(() => {
-    Promise.all([fetchConversations(), fetchLeads()]).then(() => setLoading(false));
+    fetchConversations();
+    fetchLeads();
   }, []);
 
   useEffect(() => {
@@ -81,7 +81,6 @@ export default function InboxPage() {
     }
   }, [activeConvId]);
 
-  // Real-time polling every 3 seconds to pull live updates automatically
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
@@ -90,7 +89,7 @@ export default function InboxPage() {
     return () => clearInterval(interval);
   }, [activeConvId]);
 
-  const activeConv = conversations.find((c) => c.id === activeConvId) || conversations[0];
+  const activeConv = conversations.find((c) => c.id === activeConvId);
   const currentLead = leads.find((l) => l.instagramUsername === activeConv?.customerUsername);
 
   // Filter conversations
@@ -102,9 +101,38 @@ export default function InboxPage() {
     return matchesSearch && c.status === activeTabFilter;
   });
 
-  // Handle owner sending message live to real-time database
+  const handleCreateNewThread = async () => {
+    const username = prompt("Enter customer Instagram handle (e.g. alex_brand):");
+    if (!username) return;
+
+    const newConv: Conversation = {
+      id: `conv-${Date.now()}`,
+      channel: "instagram",
+      customerUsername: username.replace("@", ""),
+      customerName: username.replace("@", ""),
+      lastMessageText: "Conversation started",
+      lastMessageAt: new Date().toISOString(),
+      unreadCount: 0,
+      tags: ["New Lead"],
+      leadScore: 50,
+      leadTemperature: "warm",
+      aiSummary: "New Instagram lead thread",
+      assignedPersonalityId: "p1",
+      status: "active",
+    };
+
+    await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newConv),
+    });
+
+    fetchConversations();
+    setActiveConvId(newConv.id);
+  };
+
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return;
+    if (!inputMessage.trim() || !activeConvId) return;
     const text = inputMessage;
     setInputMessage("");
 
@@ -122,8 +150,8 @@ export default function InboxPage() {
     fetchConversations();
   };
 
-  // Simulate an incoming customer message in real-time
   const handleSimulateCustomerMessage = async (promptText: string) => {
+    if (!activeConvId) return;
     await fetch("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -147,9 +175,9 @@ export default function InboxPage() {
             <h2 className="font-bold tracking-tight text-base flex items-center gap-2">
               Instagram DM Inbox
             </h2>
-            <Badge variant="outline" className="text-[10px] font-mono">
-              Live DB
-            </Badge>
+            <Button size="sm" variant="outline" onClick={handleCreateNewThread} className="text-xs h-7 gap-1">
+              <Plus className="h-3 w-3" /> New
+            </Button>
           </div>
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -177,54 +205,47 @@ export default function InboxPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto divide-y divide-border/40">
-          {filteredConversations.map((conv) => {
-            const isSelected = conv.id === activeConvId;
-            return (
-              <div
-                key={conv.id}
-                onClick={() => setActiveConvId(conv.id)}
-                className={`p-3.5 cursor-pointer transition-all ${
-                  isSelected ? "bg-muted font-medium" : "hover:bg-muted/40"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-xs text-foreground">
-                      @{conv.customerUsername}
+          {filteredConversations.length === 0 ? (
+            <div className="p-8 text-center space-y-2 text-muted-foreground text-xs">
+              <p>No active conversations in database.</p>
+              <Button size="sm" variant="outline" onClick={handleCreateNewThread} className="text-xs mt-2 gap-1">
+                <Plus className="h-3 w-3" /> Start DM Thread
+              </Button>
+            </div>
+          ) : (
+            filteredConversations.map((conv) => {
+              const isSelected = conv.id === activeConvId;
+              return (
+                <div
+                  key={conv.id}
+                  onClick={() => setActiveConvId(conv.id)}
+                  className={`p-3.5 cursor-pointer transition-all ${
+                    isSelected ? "bg-muted font-medium" : "hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-xs text-foreground">
+                        @{conv.customerUsername}
+                      </span>
+                      {conv.status === "pending" && (
+                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {new Date(conv.lastMessageAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
                     </span>
-                    {conv.status === "pending" && (
-                      <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                    )}
                   </div>
-                  <span className="text-[10px] text-muted-foreground font-mono">
-                    {new Date(conv.lastMessageAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
+                  <p className="text-xs text-muted-foreground truncate mt-1">
+                    {conv.lastMessageText}
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground truncate mt-1">
-                  {conv.lastMessageText}
-                </p>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <Badge
-                    variant={conv.leadTemperature === "hot" ? "default" : "outline"}
-                    className="text-[9px] px-1.5 py-0"
-                  >
-                    Score: {conv.leadScore}
-                  </Badge>
-                  {conv.tags?.map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-[9px] px-1.5 py-0.2 rounded bg-muted-foreground/10 text-muted-foreground font-mono"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -249,77 +270,83 @@ export default function InboxPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleSimulateCustomerMessage("What is your agency pricing for scale package?")}
+                onClick={() => handleSimulateCustomerMessage("What are your pricing packages and refund policy?")}
                 className="text-xs gap-1"
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                Simulate Customer DM
+                Simulate DM Question
               </Button>
             </div>
           </div>
 
           <div className="flex-1 p-6 overflow-y-auto space-y-4">
-            {messages.map((msg) => {
-              const isCustomer = msg.sender === "customer";
-              const isAi = msg.sender === "ai";
+            {messages.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-muted-foreground text-xs">
+                No messages in thread yet. Type a message below or click "Simulate DM Question".
+              </div>
+            ) : (
+              messages.map((msg) => {
+                const isCustomer = msg.sender === "customer";
+                const isAi = msg.sender === "ai";
 
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${
-                    isCustomer ? "items-start" : "items-end"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] text-muted-foreground font-mono">
-                      {msg.sender === "customer"
-                        ? `@${activeConv.customerUsername}`
-                        : msg.sender === "ai"
-                        ? "Zawr AI Engine"
-                        : "Owner"}
-                    </span>
-
-                    {isAi && (
-                      <Badge
-                        variant={
-                          msg.confidenceScore >= 95
-                            ? "default"
-                            : msg.confidenceScore >= 80
-                            ? "outline"
-                            : "destructive"
-                        }
-                        className="text-[9px] gap-1 px-1.5"
-                      >
-                        {msg.confidenceScore >= 95 ? (
-                          <ShieldCheck className="h-3 w-3" />
-                        ) : (
-                          <AlertCircle className="h-3 w-3" />
-                        )}
-                        {msg.confidenceScore}% Confidence ({msg.decisionRoute})
-                      </Badge>
-                    )}
-                  </div>
-
+                return (
                   <div
-                    className={`max-w-md rounded-lg p-3.5 text-xs leading-relaxed ${
-                      isCustomer
-                        ? "bg-muted text-foreground border border-border"
-                        : isAi
-                        ? "bg-neutral-900 text-neutral-100 border border-neutral-700"
-                        : "bg-foreground text-background font-medium"
+                    key={msg.id}
+                    className={`flex flex-col ${
+                      isCustomer ? "items-start" : "items-end"
                     }`}
                   >
-                    {msg.content}
-                  </div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        {msg.sender === "customer"
+                          ? `@${activeConv.customerUsername}`
+                          : msg.sender === "ai"
+                          ? "Zawr AI Engine"
+                          : "Owner"}
+                      </span>
 
-                  {isAi && msg.tokensUsed && (
-                    <span className="text-[9px] text-muted-foreground font-mono mt-1">
-                      {msg.latencyMs}ms • {msg.tokensUsed} tokens
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+                      {isAi && (
+                        <Badge
+                          variant={
+                            msg.confidenceScore >= 95
+                              ? "default"
+                              : msg.confidenceScore >= 80
+                              ? "outline"
+                              : "destructive"
+                          }
+                          className="text-[9px] gap-1 px-1.5"
+                        >
+                          {msg.confidenceScore >= 95 ? (
+                            <ShieldCheck className="h-3 w-3" />
+                          ) : (
+                            <AlertCircle className="h-3 w-3" />
+                          )}
+                          {msg.confidenceScore}% Confidence ({msg.decisionRoute})
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div
+                      className={`max-w-md rounded-lg p-3.5 text-xs leading-relaxed ${
+                        isCustomer
+                          ? "bg-muted text-foreground border border-border"
+                          : isAi
+                          ? "bg-neutral-900 text-neutral-100 border border-neutral-700"
+                          : "bg-foreground text-background font-medium"
+                      }`}
+                    >
+                      {msg.content}
+                    </div>
+
+                    {isAi && msg.tokensUsed && (
+                      <span className="text-[9px] text-muted-foreground font-mono mt-1">
+                        {msg.latencyMs}ms • {msg.tokensUsed} tokens
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
 
           <div className="p-4 border-t border-border bg-card flex items-center gap-3">
@@ -338,12 +365,15 @@ export default function InboxPage() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">
-          Select a conversation from the sidebar
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-muted-foreground text-xs space-y-3">
+          <p>No conversation selected.</p>
+          <Button size="sm" onClick={handleCreateNewThread} className="gap-1">
+            <Plus className="h-4 w-4" /> Start First Real-Time DM Thread
+          </Button>
         </div>
       )}
 
-      {/* 3. Right Sidebar: Customer Memory */}
+      {/* 3. Right Sidebar */}
       {activeConv && (
         <div className="w-80 border-l border-border bg-card p-5 overflow-y-auto space-y-6">
           <div>
@@ -364,41 +394,6 @@ export default function InboxPage() {
                 style={{ width: `${currentLead?.leadScore || activeConv.leadScore}%` }}
               />
             </div>
-            <div className="flex justify-between items-center text-[10px] text-muted-foreground font-mono pt-1">
-              <span>Intent: High</span>
-              <span>Temp: {activeConv.leadTemperature.toUpperCase()}</span>
-            </div>
-          </div>
-
-          <div className="space-y-3 text-xs">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <User className="h-3.5 w-3.5 shrink-0" />
-              <span className="font-medium text-foreground">
-                {currentLead?.name || activeConv.customerName}
-              </span>
-            </div>
-            {currentLead?.company && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Building className="h-3.5 w-3.5 shrink-0" />
-                <span>{currentLead.company}</span>
-              </div>
-            )}
-            {currentLead?.budgetRange && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <DollarSign className="h-3.5 w-3.5 shrink-0" />
-                <span>{currentLead.budgetRange}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2 border-t border-border pt-4">
-            <span className="text-xs font-semibold flex items-center gap-1.5">
-              <FileText className="h-3.5 w-3.5" />
-              AI Executive Summary
-            </span>
-            <p className="text-xs text-muted-foreground leading-relaxed bg-muted/40 p-2.5 rounded border border-border/60">
-              {currentLead?.aiSummary || activeConv.aiSummary}
-            </p>
           </div>
         </div>
       )}
