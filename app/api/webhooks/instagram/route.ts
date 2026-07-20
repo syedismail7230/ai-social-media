@@ -6,7 +6,7 @@ import { RagEngine } from "@/lib/ai/rag-engine";
 async function sendInstagramReply(recipientId: string, text: string) {
   const pageAccessToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN;
   if (!pageAccessToken) {
-    console.error("[Meta Graph API Error] INSTAGRAM_PAGE_ACCESS_TOKEN is missing in environment variables!");
+    console.error("[Meta Graph API Error] INSTAGRAM_PAGE_ACCESS_TOKEN is missing!");
     return { success: false, error: "Missing INSTAGRAM_PAGE_ACCESS_TOKEN" };
   }
 
@@ -20,7 +20,23 @@ async function sendInstagramReply(recipientId: string, text: string) {
       }),
     });
     const data = await res.json();
-    console.log("[Meta Graph API Reply Sent]", data);
+    console.log("[Meta Graph API Reply Response]", JSON.stringify(data));
+
+    // Log Graph API response to Telemetry table for live auditing
+    Repository.addLog({
+      id: `log-graph-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      customerUsername: `user_${recipientId.slice(-4)}`,
+      prompt: `[Meta Reply Status: ${res.status}] ${JSON.stringify(data)}`,
+      confidenceScore: res.ok ? 100 : 0,
+      decisionRoute: res.ok ? "auto_reply" : "error",
+      provider: "meta",
+      model: "graph-v19.0",
+      tokensTotal: text.length,
+      latencyMs: 200,
+      status: res.ok ? "success" : "error",
+    });
+
     return { success: res.ok, data };
   } catch (err) {
     console.error("[Meta Graph API Exception]", err);
@@ -123,24 +139,9 @@ export async function POST(req: NextRequest) {
             const knowledge = Repository.getKnowledge();
             const ragResult = RagEngine.evaluateQuery(messageText, personalities[0] || { greetingStyle: "" }, knowledge);
 
-            // Save telemetry log
-            Repository.addLog({
-              id: `log-${Date.now()}`,
-              timestamp: new Date().toISOString(),
-              customerUsername: conv.customerUsername,
-              prompt: messageText,
-              confidenceScore: ragResult.confidenceScore,
-              decisionRoute: ragResult.decisionRoute,
-              provider: "gemini",
-              model: "gemini-1.5-flash",
-              tokensTotal: 120,
-              latencyMs: 350,
-              status: "success",
-            });
-
-            // 4. Auto-reply if confidence is good or default
             const replyText = ragResult.replyText || "Hello! Thanks for contacting us. How can we assist you today?";
-            
+
+            // Save AI reply to database
             Repository.addMessage({
               id: `m-ai-${Date.now()}`,
               conversationId: convId,
