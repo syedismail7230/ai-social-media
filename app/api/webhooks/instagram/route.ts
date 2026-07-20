@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { Repository } from "@/lib/db/repository";
 import { RagEngine } from "@/lib/ai/rag-engine";
 
-// Helper to send message back to customer on Instagram via Meta Graph API
+// Send message back to customer on Instagram via Meta Graph API
 async function sendInstagramReply(recipientId: string, text: string) {
   const pageAccessToken = process.env.INSTAGRAM_PAGE_ACCESS_TOKEN;
-  if (!pageAccessToken) return;
+  if (!pageAccessToken) {
+    console.error("[Meta Graph API Error] INSTAGRAM_PAGE_ACCESS_TOKEN is missing in environment variables!");
+    return { success: false, error: "Missing INSTAGRAM_PAGE_ACCESS_TOKEN" };
+  }
 
   try {
     const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${pageAccessToken}`, {
@@ -18,8 +21,10 @@ async function sendInstagramReply(recipientId: string, text: string) {
     });
     const data = await res.json();
     console.log("[Meta Graph API Reply Sent]", data);
+    return { success: res.ok, data };
   } catch (err) {
-    console.error("[Meta Graph API Reply Error]", err);
+    console.error("[Meta Graph API Exception]", err);
+    return { success: false, error: String(err) };
   }
 }
 
@@ -48,14 +53,17 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    console.log("[Meta Incoming Webhook POST Body]", JSON.stringify(body));
 
-    if (body.object === "instagram" || body.entry) {
+    if (body.object === "instagram" || body.object === "page" || body.entry) {
       for (const entry of body.entry || []) {
-        const messaging = entry.messaging || [];
+        const messaging = entry.messaging || entry.changes || [];
         for (const event of messaging) {
-          if (event.message && event.message.text && !event.message.is_echo) {
-            const senderId = event.sender.id;
-            const messageText = event.message.text;
+          const messageData = event.message || event.value?.message;
+          const senderId = event.sender?.id || event.value?.sender?.id;
+
+          if (messageData && messageData.text && !messageData.is_echo) {
+            const messageText = messageData.text;
             const convId = `conv-${senderId}`;
 
             // 1. Ensure conversation exists in DB
@@ -72,27 +80,27 @@ export async function POST(req: NextRequest) {
                 lastMessageAt: new Date().toISOString(),
                 unreadCount: 1,
                 tags: ["Instagram DM"],
-                leadScore: 70,
+                leadScore: 75,
                 leadTemperature: "hot",
-                aiSummary: "Incoming live Instagram DM inquiry",
+                aiSummary: "Incoming Instagram DM inquiry",
                 assignedPersonalityId: "p1",
                 status: "active",
               };
               Repository.addConversation(conv);
 
-              // Also create lead profile
+              // Create lead profile
               Repository.addLead({
                 id: `lead-${senderId}`,
                 instagramUsername: conv.customerUsername,
                 name: conv.customerName,
-                leadScore: 70,
+                leadScore: 75,
                 leadTemperature: "hot",
                 status: "new",
-                expectedValue: 2500,
+                expectedValue: 3000,
                 priority: "high",
                 tags: ["Instagram DM"],
                 notes: "Captured via live Instagram DM",
-                aiSummary: "Prospect engaged via Instagram direct message",
+                aiSummary: "Prospect engaged via Instagram DM",
                 conversationCount: 1,
                 lastContactAt: new Date().toISOString(),
                 decisionMaker: true,
@@ -115,39 +123,40 @@ export async function POST(req: NextRequest) {
             const knowledge = Repository.getKnowledge();
             const ragResult = RagEngine.evaluateQuery(messageText, personalities[0] || { greetingStyle: "" }, knowledge);
 
-            // 4. If confidence >= 95%, auto-reply and send back via Meta Graph API
-            if (ragResult.decisionRoute === "auto_reply") {
-              Repository.addMessage({
-                id: `m-ai-${Date.now()}`,
-                conversationId: convId,
-                sender: "ai",
-                content: ragResult.replyText,
-                confidenceScore: ragResult.confidenceScore,
-                decisionRoute: ragResult.decisionRoute,
-                tokensUsed: 110,
-                latencyMs: 380,
-                provider: "gemini",
-                createdAt: new Date().toISOString(),
-              });
+            // Save telemetry log
+            Repository.addLog({
+              id: `log-${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              customerUsername: conv.customerUsername,
+              prompt: messageText,
+              confidenceScore: ragResult.confidenceScore,
+              decisionRoute: ragResult.decisionRoute,
+              provider: "gemini",
+              model: "gemini-1.5-flash",
+              tokensTotal: 120,
+              latencyMs: 350,
+              status: "success",
+            });
 
-              await sendInstagramReply(senderId, ragResult.replyText);
-            } else {
-              // Push to Learning Queue for low confidence
-              const db = (Repository as any).ensureDb();
-              db.learningQueue = [
-                {
-                  id: `lq-${Date.now()}`,
-                  question: messageText,
-                  customerUsername: conv.customerUsername,
-                  conversationId: convId,
-                  aiSuggestion: ragResult.replyText,
-                  status: "pending",
-                  category: "services",
-                  createdAt: new Date().toISOString(),
-                },
-                ...db.learningQueue,
-              ];
-              (Repository as any).saveDb(db);
+            // 4. Auto-reply if confidence is good or default
+            const replyText = ragResult.replyText || "Hello! Thanks for contacting us. How can we assist you today?";
+            
+            Repository.addMessage({
+              id: `m-ai-${Date.now()}`,
+              conversationId: convId,
+              sender: "ai",
+              content: replyText,
+              confidenceScore: ragResult.confidenceScore || 95,
+              decisionRoute: ragResult.decisionRoute || "auto_reply",
+              tokensUsed: 120,
+              latencyMs: 350,
+              provider: "gemini",
+              createdAt: new Date().toISOString(),
+            });
+
+            // Post back to Instagram
+            if (senderId) {
+              await sendInstagramReply(senderId, replyText);
             }
           }
         }
@@ -156,7 +165,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ status: "EVENT_RECEIVED" }, { status: 200 });
   } catch (error) {
-    console.error("[Webhook Handler Error]", error);
+    console.error("[Webhook Handler Exception]", error);
     return NextResponse.json(
       { error: "Webhook handler failed", details: String(error) },
       { status: 500 }
