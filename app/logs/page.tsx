@@ -1,20 +1,36 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { FileText, ShieldCheck, AlertCircle, Search, Filter } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { initialLogs } from "@/lib/store/mock-data";
 import { AiLog } from "@/types";
 
 export default function LogsPage() {
-  const [logs] = useState<AiLog[]>(initialLogs);
+  const [logs, setLogs] = useState<AiLog[]>([]);
   const [search, setSearch] = useState("");
+
+  const fetchLogs = async () => {
+    try {
+      const res = await fetch("/api/logs");
+      if (res.ok) {
+        setLogs(await res.json());
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   const filtered = logs.filter(
     (l) =>
-      l.customerUsername.toLowerCase().includes(search.toLowerCase()) ||
-      l.prompt.toLowerCase().includes(search.toLowerCase())
+      l.customerUsername?.toLowerCase().includes(search.toLowerCase()) ||
+      l.prompt?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -23,7 +39,7 @@ export default function LogsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">AI Audit Logs & Telemetry</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Complete records of prompts, knowledge sources used, confidence scores, latency, and tokens.
+            Live real-time records of prompts, knowledge sources used, confidence scores, latency, and tokens.
           </p>
         </div>
       </div>
@@ -41,7 +57,7 @@ export default function LogsPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base font-semibold">Execution Audit Log History</CardTitle>
+          <CardTitle className="text-base font-semibold">Live Database Audit Log History</CardTitle>
           <CardDescription>Immutable trail of every AI decision & confidence score</CardDescription>
         </CardHeader>
         <CardContent className="p-0">

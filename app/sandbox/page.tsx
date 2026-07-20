@@ -1,18 +1,41 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { PlaySquare, Sparkles, ShieldCheck, AlertCircle, Bot, Code, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { initialPersonalities, initialKnowledge } from "@/lib/store/mock-data";
+import { AiPersonality, KnowledgeItem } from "@/types";
 import { RagEngine, RagResult } from "@/lib/ai/rag-engine";
 
 export default function SandboxPage() {
   const [testPrompt, setTestPrompt] = useState("What are your agency pricing tiers and refund policy?");
-  const [selectedPersonalityId, setSelectedPersonalityId] = useState(initialPersonalities[0].id);
+  const [personalities, setPersonalities] = useState<AiPersonality[]>([]);
+  const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
+  const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
   const [result, setResult] = useState<RagResult | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+
+  const fetchDbData = async () => {
+    try {
+      const [pRes, kRes] = await Promise.all([
+        fetch("/api/personalities"),
+        fetch("/api/knowledge"),
+      ]);
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        setPersonalities(pData);
+        if (pData.length) setSelectedPersonalityId(pData[0].id);
+      }
+      if (kRes.ok) setKnowledge(await kRes.json());
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    fetchDbData();
+  }, []);
 
   const handleRunSimulation = () => {
     if (!testPrompt.trim()) return;
@@ -20,10 +43,15 @@ export default function SandboxPage() {
 
     setTimeout(() => {
       const activePers =
-        initialPersonalities.find((p) => p.id === selectedPersonalityId) ||
-        initialPersonalities[0];
+        personalities.find((p) => p.id === selectedPersonalityId) ||
+        personalities[0] || {
+          id: "p1",
+          name: "Luxury",
+          tone: "Polished",
+          greetingStyle: "Welcome to Zawr",
+        };
 
-      const res = RagEngine.evaluateQuery(testPrompt, activePers, initialKnowledge);
+      const res = RagEngine.evaluateQuery(testPrompt, activePers, knowledge);
       setResult(res);
       setIsSimulating(false);
     }, 300);
@@ -36,12 +64,12 @@ export default function SandboxPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Interactive AI Sandbox Simulator</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Simulate Instagram DM questions live. Inspect RAG vector matching, confidence score thresholds, and decision flows.
+            Simulate Instagram DM questions live against live Neon DB vector knowledge base.
           </p>
         </div>
         <Button onClick={handleRunSimulation} disabled={isSimulating} className="gap-2">
           {isSimulating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <PlaySquare className="h-4 w-4" />}
-          Run Simulation
+          Run Live RAG Simulation
         </Button>
       </div>
 
@@ -50,7 +78,7 @@ export default function SandboxPage() {
         <Card className="space-y-4">
           <CardHeader>
             <CardTitle className="text-base font-semibold">Simulation Input & Personality</CardTitle>
-            <CardDescription>Test any scenario before publishing to live Instagram DMs</CardDescription>
+            <CardDescription>Queries live database knowledge items</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-xs">
             <div>
@@ -60,7 +88,7 @@ export default function SandboxPage() {
                 onChange={(e) => setSelectedPersonalityId(e.target.value)}
                 className="w-full bg-muted/50 border border-border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-foreground font-sans"
               >
-                {initialPersonalities.map((p) => (
+                {personalities.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.tone})
                   </option>
@@ -155,7 +183,7 @@ export default function SandboxPage() {
               </>
             ) : (
               <div className="h-full flex items-center justify-center text-neutral-500 text-center py-12">
-                Click "Run Simulation" to inspect RAG response calculation
+                Click "Run Live RAG Simulation" to test against database
               </div>
             )}
           </CardContent>
