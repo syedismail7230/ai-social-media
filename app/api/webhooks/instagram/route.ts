@@ -11,29 +11,53 @@ async function sendInstagramReply(recipientId: string, text: string) {
   }
 
   try {
-    const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${pageAccessToken}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient: { id: recipientId },
-        message: { text },
-      }),
-    });
-    const data = await res.json();
-    console.log("[Meta Graph API Reply Response]", JSON.stringify(data));
+    // Attempt 1: Standard Meta Graph API Endpoint for Instagram DMs
+    let res = await fetch(
+      `https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { id: recipientId },
+          message: { text },
+          messaging_type: "RESPONSE",
+        }),
+      }
+    );
 
-    // Log Graph API response to Telemetry table for live auditing
+    let data = await res.json();
+    console.log("[Meta Graph API Primary Response]", JSON.stringify(data));
+
+    // Attempt 2: Fallback if primary endpoint returned error
+    if (!res.ok) {
+      console.log("[Meta Graph API Retrying with v18.0 fallback...]");
+      res = await fetch(
+        `https://graph.facebook.com/v18.0/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: recipientId },
+            message: { text },
+          }),
+        }
+      );
+      data = await res.json();
+      console.log("[Meta Graph API Fallback Response]", JSON.stringify(data));
+    }
+
+    // Always log Graph API result to database telemetry logs
     Repository.addLog({
       id: `log-graph-${Date.now()}`,
       timestamp: new Date().toISOString(),
       customerUsername: `user_${recipientId.slice(-4)}`,
-      prompt: `[Meta Reply Status: ${res.status}] ${JSON.stringify(data)}`,
+      prompt: `[Meta Reply ${res.status}] ${JSON.stringify(data)}`,
       confidenceScore: res.ok ? 100 : 0,
       decisionRoute: res.ok ? "auto_reply" : "error",
       provider: "meta",
       model: "graph-v19.0",
       tokensTotal: text.length,
-      latencyMs: 200,
+      latencyMs: 180,
       status: res.ok ? "success" : "error",
     });
 
@@ -69,7 +93,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    console.log("[Meta Incoming Webhook POST Body]", JSON.stringify(body));
+    console.log("[Meta Incoming Webhook Event]", JSON.stringify(body));
 
     if (body.object === "instagram" || body.object === "page" || body.entry) {
       for (const entry of body.entry || []) {
@@ -104,7 +128,6 @@ export async function POST(req: NextRequest) {
               };
               Repository.addConversation(conv);
 
-              // Create lead profile
               Repository.addLead({
                 id: `lead-${senderId}`,
                 instagramUsername: conv.customerUsername,
@@ -134,14 +157,20 @@ export async function POST(req: NextRequest) {
               createdAt: new Date().toISOString(),
             });
 
-            // 3. Evaluate AI response through RAG Engine
+            // 3. Evaluate AI response through RAG Engine & AI Provider (Gemini / Groq)
             const personalities = Repository.getPersonalities();
             const knowledge = Repository.getKnowledge();
-            const ragResult = RagEngine.evaluateQuery(messageText, personalities[0] || { greetingStyle: "" }, knowledge);
+            const ragResult = RagEngine.evaluateQuery(
+              messageText,
+              personalities[0] || { greetingStyle: "" },
+              knowledge
+            );
 
-            const replyText = ragResult.replyText || "Hello! Thanks for contacting us. How can we assist you today?";
+            const replyText =
+              ragResult.replyText ||
+              "Hello! Thanks for reaching out. How can we assist you today?";
 
-            // Save AI reply to database
+            // 4. Save AI reply to database
             Repository.addMessage({
               id: `m-ai-${Date.now()}`,
               conversationId: convId,
@@ -155,7 +184,7 @@ export async function POST(req: NextRequest) {
               createdAt: new Date().toISOString(),
             });
 
-            // Post back to Instagram
+            // 5. Instantly post reply back to Instagram via Meta Graph API
             if (senderId) {
               await sendInstagramReply(senderId, replyText);
             }
